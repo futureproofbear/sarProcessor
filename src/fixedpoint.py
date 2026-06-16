@@ -26,11 +26,18 @@ def fit_scale(arr, nbits):
     return 2.0 ** exp, exp
 
 
-def quant(arr, lsb, nbits):
-    """Round complex arr to a signed nbits grid with step `lsb` (saturating)."""
+def quant(arr, lsb, nbits, mode="trunc"):
+    """Quantize complex arr to a signed nbits grid with step `lsb` (saturating).
+
+    mode="trunc": floor toward -inf, i.e. two's-complement LSB truncation as the
+    FPGA datapath does (arithmetic shift right) -- used for ALL on-fabric
+    quantization here, including the twiddle ROM, to emulate the PolarFire SoC
+    datapath faithfully. mode="round" (round to nearest) is retained for callers
+    that want the synthesis-time rounded ROM instead."""
     full = 2 ** (nbits - 1) - 1
-    re = np.clip(np.round(arr.real / lsb), -full - 1, full)
-    im = np.clip(np.round(arr.imag / lsb), -full - 1, full)
+    step = np.floor if mode == "trunc" else np.round
+    re = np.clip(step(arr.real / lsb), -full - 1, full)
+    im = np.clip(step(arr.imag / lsb), -full - 1, full)
     return (re + 1j * im) * lsb
 
 
@@ -52,7 +59,9 @@ def fft1d_bfp(x, nbits, nbits_tw, perm):
     lsb_tw = 2.0 ** -(nbits_tw - 1)                 # twiddles in ~[-1, 1)
     for s in range(1, stages + 1):
         m = 1 << s; mh = m >> 1
-        w = quant(np.exp(-2j * np.pi * np.arange(mh) / m), lsb_tw, nbits_tw).astype(x.dtype, copy=False)
+        # floor (truncate) the twiddles too: emulate the FPGA datapath, where
+        # the PolarFire SoC fabric truncates rather than rounds.
+        w = quant(np.exp(-2j * np.pi * np.arange(mh) / m), lsb_tw, nbits_tw, mode="trunc").astype(x.dtype, copy=False)
         xr = x.reshape(*x.shape[:-1], n // m, m)
         a = xr[..., :mh]; b = xr[..., mh:]
         t = w * b                                    # complex multiply (grows)
