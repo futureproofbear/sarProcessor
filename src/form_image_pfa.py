@@ -27,15 +27,37 @@ Requires: numpy, matplotlib, sarpy (all already installed). scipy optional.
 import os
 import sys
 import math
+import json
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 import numpy as np
-import matplotlib.pyplot as plt
 from sarpy.io.phase_history.converter import open_phase_history
 
 C = 299_792_458.0  # m/s
+
+
+class StepTimer:
+    """Accumulate wall-time per named processing step; dump to JSON for the report."""
+    def __init__(self):
+        self._t = time.perf_counter()
+        self.steps = []
+
+    def lap(self, name):
+        now = time.perf_counter()
+        self.steps.append((name, now - self._t))
+        print(f"    [t] {name:<28} {self.steps[-1][1]:8.2f} s")
+        self._t = now
+
+    def dump(self, path, meta=None):
+        d = {"steps": [{"step": n, "seconds": round(s, 3)} for n, s in self.steps],
+             "total_seconds": round(sum(s for _, s in self.steps), 3)}
+        if meta:
+            d["meta"] = meta
+        Path(path).write_text(json.dumps(d, indent=2))
+        print(f"    [t] timings -> {path}")
 
 # --------------------------------------------------------------------------- #
 # CONFIG  -- defaults below; override any field in <project_root>/config.yaml
@@ -74,7 +96,6 @@ FLIP_ROW = bool(_cfg.get("flip_row", True))
 
 # output names follow the capture id in the key (so each scene is distinct)
 _stem = KEY.split("/")[-1].replace("_CPHD.cphd", "") or "scene"
-OUT_PNG = OUTPUT_DIR / f"{_stem}_pfa.png"
 OUT_TIF = OUTPUT_DIR / f"{_stem}_detected.tif"
 
 # Calibration constants MEASURED on this laptop at M0*N0 = 5634*4319 elements.
@@ -126,6 +147,10 @@ def transform2d(arr, sgn):
     return np.fft.fftshift(fwd(np.fft.ifftshift(arr)))
 
 
+def to_pow2(n):
+    return 1 << int(math.ceil(math.log2(n)))
+
+
 def hamming2d(shape):
     return np.outer(np.hamming(shape[0]), np.hamming(shape[1])).astype(np.float32)
 
@@ -137,12 +162,17 @@ def quicklook(sig, sgn):
     return transform2d(sig, sgn)
 
 
-def pfa(sig, freq, ax, ay, sgn):
-    """2-pass keystone Polar Format Algorithm -> Cartesian k-grid -> 2-D FFT.
+def resample_kspace(sig, freq, ax, ay):
+    """Polar->Cartesian keystone resample + Hamming window.
 
     sig  : (M, N) complex signal
     freq : (M, N) RF frequency of each sample (Hz)
     ax,ay: (M,)   in-plane components of each pulse's unit look direction
+
+    Returns (g2, geo): g2 is the (M, N) windowed k-space that feeds the 2-D FFT;
+    geo holds the *unpadded* pixel spacing and rotated-frame unit vectors. The
+    fixed-point script reuses this verbatim, so the float and fixed pipelines
+    differ ONLY in the FFT/detect arithmetic.
     """
     m, n = sig.shape
     kmag = 2.0 * freq / C                       # |k| projected... (cycles/m), (M,N)
@@ -185,16 +215,39 @@ def pfa(sig, freq, ax, ay, sgn):
 
     if WINDOW:
         g2 = g2 * hamming2d(g2.shape)
-    img = transform2d(g2, sgn)
     # pixel spacing (m): 1 / total k-extent (cycles/m); rows=cross, cols=range
     dr = 1.0 / (KR[-1] - KR[0]) if KR[-1] != KR[0] else float("nan")
     dc = 1.0 / (KC[-1] - KC[0]) if KC[-1] != KC[0] else float("nan")
     geo = {"dc": dc, "dr": dr, "dhat": (dx, dy), "chat": (cx, cy)}
+    return g2, geo
+
+
+def focus(g2, geo, sgn):
+    """Zero-pad the windowed k-space to a power-of-2 grid, then 2-D FFT.
+
+    Padding to pow2 matches the radix-2 grid the FPGA fabric forms on, so the
+    float GeoTIFF here and the fixed-point GeoTIFF are the same size and directly
+    comparable. Pixel spacing is scaled to the finer (padded) grid.
+    """
+    m, n = g2.shape
+    m2, n2 = to_pow2(m), to_pow2(n)
+    pad = np.zeros((m2, n2), dtype=np.complex64)
+    pad[:m, :n] = g2
+    img = transform2d(pad, sgn)
+    geo = dict(geo)
+    geo["dr"] *= n / n2                          # range (cols), finer after padding
+    geo["dc"] *= m / m2                          # cross (rows)
     return img, geo
 
 
+def pfa(sig, freq, ax, ay, sgn):
+    """2-pass keystone PFA: resample (polar->Cartesian) + pad-to-pow2 + 2-D FFT."""
+    g2, geo = resample_kspace(sig, freq, ax, ay)
+    return focus(g2, geo, sgn)
+
+
 def save_detected_geotiff(img, geo, center_ecef, uiax, uiay, out_tif, epsg,
-                          flip_col=False, flip_row=False):
+                          flip_col=False, flip_row=False, dtype="uint8"):
     """Detect |img|, attach a rotated affine (radar grid -> map), write GeoTIFF.
 
     The image is planar, so the radar grid maps to UTM by a single affine; we
@@ -231,15 +284,18 @@ def save_detected_geotiff(img, geo, center_ecef, uiax, uiay, out_tif, epsg,
                a[1], b[1], p0[1] - a[1]*col0 - b[1]*row0)
 
     amp = np.abs(img).astype(np.float32)
-    hi = np.percentile(amp, 99.7)
-    u8 = np.clip(amp / (hi + 1e-12) * 255.0, 0, 255).astype(np.uint8)
+    if dtype == "float32":
+        data = amp                                     # raw magnitude, no requantization
+    else:
+        hi = np.percentile(amp, 99.7)
+        data = np.clip(amp / (hi + 1e-12) * 255.0, 0, 255).astype(np.uint8)
 
     with rasterio.open(out_tif, "w", driver="GTiff", height=m, width=n, count=1,
-                       dtype="uint8", crs=f"EPSG:{epsg}", transform=A,
+                       dtype=dtype, crs=f"EPSG:{epsg}", transform=A,
                        compress="lzw") as dst:
-        dst.write(u8, 1)
+        dst.write(data, 1)
     b_ = rasterio.open(out_tif).bounds
-    print(f"    wrote {out_tif}  {n}x{m} uint8  {os.path.getsize(out_tif)/1e6:.1f} MB")
+    print(f"    wrote {out_tif}  {n}x{m} {dtype}  {os.path.getsize(out_tif)/1e6:.1f} MB")
     print(f"    centre UTM {tuple(round(v) for v in p0)}  bounds {tuple(round(v) for v in b_)}")
 
 
@@ -247,6 +303,7 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     download_if_needed(LOCAL_CPHD, KEY)
 
+    t = StepTimer()
     reader = open_phase_history(str(LOCAL_CPHD))
     meta = reader.cphd_meta
     sgn = int(meta.Global.SGN)
@@ -254,6 +311,7 @@ def main():
     print(f"[2] domain={meta.Global.DomainType} SGN={sgn} "
           f"pulses={n_vec} samples={n_samp}")
     assert meta.Global.DomainType == "FX", "script assumes FX domain"
+    t.lap("open + read header")
 
     mu = max(1, DECIMATE_PULSE); nu = max(1, DECIMATE_SAMPLE)
     m_use = len(range(0, n_vec, mu)); n_use = len(range(0, n_samp, nu))
@@ -283,44 +341,40 @@ def main():
     u = los / np.linalg.norm(los, axis=1, keepdims=True)
     ax = u @ uiax
     ay = u @ uiay
+    t.lap("read PVP geometry")
 
     # --- read signal (decimated) -------------------------------------------- #
     sig = reader.read_chip((0, n_vec, mu), (0, n_samp, nu), index=0)
     sig = np.asarray(sig, dtype=np.complex64)
     print(f"[3] signal {sig.shape}  {sig.nbytes/1e6:.0f} MB in RAM")
     reader.close()
+    t.lap("read signal (phase history)")
 
     # --- focus --------------------------------------------------------------- #
     if MODE == "quicklook":
         print("[4] quick-look 2-D FFT ...")
         img = quicklook(sig, sgn); geo = None
+        t.lap("quicklook FFT")
     else:
         k = np.arange(n_use)
         freq = sc0[:, None] + k[None, :] * (scss[:, None] * nu)  # (M,N) Hz
         print("[4] PFA: pass1 range resample, pass2 azimuth resample, 2-D FFT ...")
-        img, geo = pfa(sig, freq, ax, ay, sgn)
+        g2, geo = resample_kspace(sig, freq, ax, ay)
+        t.lap("resample + window")
+        img, geo = focus(g2, geo, sgn)
+        t.lap("zero-pad + 2-D FFT")
 
     # --- detected GeoTIFF (PFA only; needs the resample geometry) ------------ #
+    # float32 = raw magnitude (no requantization) so this float reference and the
+    # fixed-point GeoTIFF are directly comparable on the same pow2 grid.
     if SAVE_GEOTIFF and geo is not None:
         print("[5] geocoding -> detected GeoTIFF ...")
         save_detected_geotiff(img, geo, srp[0], uiax, uiay, OUT_TIF, GEO_EPSG,
-                              flip_col=FLIP_COL, flip_row=FLIP_ROW)
-
-    # --- render -------------------------------------------------------------- #
-    mag = np.abs(img)
-    # robust scaling: reference at a high percentile, not the single brightest pixel
-    ref = np.percentile(mag, 99.7)
-    print(f"    mag: max={mag.max():.3g} p99.7={ref:.3g} median={np.median(mag):.3g}")
-    db = 20 * np.log10(mag / (ref + 1e-12) + 1e-6)
-    plt.figure(figsize=(8, 8))
-    plt.imshow(db, cmap="gray", vmin=-30, vmax=5, origin="lower")
-    _scene = KEY.split("/")[2] if len(KEY.split("/")) > 2 else _stem
-    title = f"Umbra CPHD {MODE} ({_scene})"
-    if geo:
-        title += f"  px~{geo['dc']:.2f}x{geo['dr']:.2f} m"
-    plt.title(title); plt.tight_layout()
-    plt.savefig(OUT_PNG, dpi=130)
-    print(f"[6] wrote {OUT_PNG}")
+                              flip_col=FLIP_COL, flip_row=FLIP_ROW, dtype="float32")
+        t.lap("detect + geocode + GeoTIFF")
+    t.dump(OUTPUT_DIR / f"{_stem}_float.timing.json",
+           meta={"mode": MODE, "pulses": n_vec, "samples": n_samp,
+                 "grid": list(img.shape), "scene": KEY.split("/")[2]})
 
 
 if __name__ == "__main__":
