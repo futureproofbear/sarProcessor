@@ -1,0 +1,16 @@
+# sar_fft.pdc -- physical constraints for the SAR FFT accelerator block.
+#
+# This block has no top-level device pins of its own: clk/reset come from the MSS
+# CCC and every AXI signal connects to an MSS Fabric Interface Controller (FIC)
+# inside the SoC SmartDesign. So there are no set_io assignments here.
+#
+# Real pin/IO constraints (clocks, LPDDR4, etc.) belong to the SoC top-level PDC,
+# which the PolarFire SoC MSS configurator and the Icicle Kit board file largely
+# generate for you. See libero/README.md.
+#
+# Optional: confine the accelerator to a fabric region to ease timing near the
+# FIC/DDR interface. Uncomment and size to your floorplan:
+#
+# set_floorplan_constraint -region_name {sar_fft_region} \
+#     -type {inclusive} -x1 0 -y1 0 -x2 40 -y2 40
+# assign_region -region {sar_fft_region} -inst_name {u_ctrl}

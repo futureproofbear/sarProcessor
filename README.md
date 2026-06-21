@@ -42,3 +42,14 @@ Key knobs at the top of `src/form_image_pfa.py`:
 ## Requires
 
 `numpy`, `scipy`, `matplotlib`, `sarpy`, `rasterio`, `pyproj` (all already installed).
+
+## Ports to the PolarFire SoC Icicle Kit
+
+- [`mpfs/`](mpfs/) — CPU + FPGA co-design (HLS templates, host-driven).
+- [`fpga/`](fpga/) — **synthesizable RTL accelerator**: a fabric-mastered 2-D
+  block-floating-point FFT + detect that reads the resampled k-space from LPDDR4,
+  forms the image one line at a time, and writes the detected magnitude back to
+  LPDDR4. Libero project (`MPFS250T-FCVG484EES`) + SystemVerilog + self-checking
+  testbench + golden vectors. Implements the fabric half of
+  [`src/form_image_pfa_fixed.py`](src/form_image_pfa_fixed.py). See
+  [`fpga/README.md`](fpga/README.md).

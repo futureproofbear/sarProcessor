@@ -1,0 +1,14 @@
+{
+  "M": 10,
+  "N": 6,
+  "M2": 16,
+  "N2": 8,
+  "sig_addr": "0x1000",
+  "buf_addr": "0x3000",
+  "out_addr": "0x5000",
+  "exp_r": 1,
+  "exp_a": 3,
+  "mag_tol": 3,
+  "out_max": 29639,
+  "arch_corr_vs_float_fft": 1.0
+}
