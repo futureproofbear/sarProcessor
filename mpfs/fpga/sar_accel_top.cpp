@@ -42,58 +42,112 @@ RESAMP:
     }
 }
 
+// Corner-turn tile size: TxT cplx tile in BRAM/URAM. T=64 -> 16 KB/tile; raise to
+// 128 (64 KB) for longer DDR bursts if write bandwidth dominates. See
+// corner_turn.cpp (verified model) and M2_integration.md (burst analysis).
+#ifndef CT_TILE
+#define CT_TILE 64
+#endif
+
+// Tiled DDR->DDR transpose of a complex frame: src is H x W range-major, dst is
+// W x H azimuth-major. Same algorithm as corner_turn.cpp, on cplx via AXI masters.
+static void corner_turn_cplx(const cplx *src, cplx *dst, int H, int W) {
+    static cplx tile[CT_TILE][CT_TILE];
+#pragma HLS bind_storage variable=tile type=ram_t2p impl=bram
+    for (int r0 = 0; r0 < H; r0 += CT_TILE) {
+        for (int c0 = 0; c0 < W; c0 += CT_TILE) {
+            int th = (H - r0 < CT_TILE) ? (H - r0) : CT_TILE;
+            int tw = (W - c0 < CT_TILE) ? (W - c0) : CT_TILE;
+        CT_RD:
+            for (int i = 0; i < th; i++)
+#pragma HLS pipeline II=1
+                for (int j = 0; j < tw; j++) tile[i][j] = src[(r0 + i) * W + (c0 + j)];
+        CT_WR:
+            for (int j = 0; j < tw; j++)
+#pragma HLS pipeline II=1
+                for (int i = 0; i < th; i++) dst[(c0 + j) * H + (r0 + i)] = tile[i][j];
+        }
+    }
+}
+
 // Top level: the host sets dims + buffer addresses, then CTRL.START.
-void sar_accel_top(cplx *signal, const float *kr, const float *kc,
+// Buffers (regmap.md): signal = SIG (input, reused as azimuth-major k-space after
+// the corner-turn), scratch = SCRATCH (range-major k-space), out = OUT. This
+// ping-pong keeps the working set at SIG(256MB)+SCRATCH(256MB)+OUT(128MB); the
+// 256 MB frame is ~100x on-chip SRAM, so both passes stream from DDR.
+void sar_accel_top(cplx *signal, cplx *scratch, const float *kr, const float *kc,
                    const float *tanphi, const float *win, unsigned char *out,
                    int M, int N, int FFT_LEN_R, int FFT_LEN_A, int &bfp_shift) {
-#pragma HLS dataflow
-
-    static cplx after_range[/*M*FFT_LEN_R*/ NFFT * 32];   // sized at build
-#pragma HLS bind_storage variable=after_range type=ram_t2p impl=uram
 
     // --- PASS 1: per pulse -> range resample -> window -> range FFT ---------
+    // Output streamed to SCRATCH range-major: scratch[pulse * FFT_LEN_R + bin].
+    // Rows p >= M are zero-padded so the azimuth FFT sees a full FFT_LEN_A column.
 PASS1:
-    for (int p = 0; p < M; p++) {
-        hls::stream<cplx> s_rs, s_fft;
+    for (int p = 0; p < FFT_LEN_A; p++) {
+        if (p < M) {
+            hls::stream<cplx> s_rs, s_win, s_fft;
 #pragma HLS stream variable=s_rs depth=64
-#pragma HLS stream variable=s_fft depth=64
-        // kr holds this pulse's source coords; uniform target grid is implicit.
-        resample_line(&signal[p * N], &kr[p * N], /*grid*/ kr, N, FFT_LEN_R, s_rs);
-        // window multiply folded into the FFT input stream
-        hls::stream<cplx> s_win;
 #pragma HLS stream variable=s_win depth=64
-        for (int i = 0; i < FFT_LEN_R; i++) {
+#pragma HLS stream variable=s_fft depth=64
+            // resample this pulse onto the N-point uniform range grid (matches the
+            // reference KR length N), then zero-pad to FFT_LEN_R for the FFT.
+            resample_line(&signal[p * N], &kr[p * N], /*grid*/ kr, N, N, s_rs);
+            for (int i = 0; i < FFT_LEN_R; i++) {
 #pragma HLS pipeline II=1
-            cplx v = s_rs.read();
-            v.re *= (data_t)win[i]; v.im *= (data_t)win[i];
+                cplx v;
+                if (i < N) {                          // range taper = win[0:N] = hamming(N)
+                    v = s_rs.read();
+                    v.re *= (data_t)win[i]; v.im *= (data_t)win[i];
+                } else {
+                    v = cplx{0, 0};                   // zero-pad to FFT_LEN_R
+                }
+                s_win.write(v);
+            }
+            int sh;
+            fft1d(s_win, s_fft, sh);
+            for (int i = 0; i < FFT_LEN_R; i++) scratch[p * FFT_LEN_R + i] = s_fft.read();
+        } else {
+            for (int i = 0; i < FFT_LEN_R; i++) scratch[p * FFT_LEN_R + i] = cplx{0, 0};
+        }
+    }
+
+    // --- CORNER-TURN: range-major (FFT_LEN_A x FFT_LEN_R) -> azimuth-major ---
+    // Transpose into the SIG buffer (free now that PASS1 consumed it).
+    corner_turn_cplx(scratch, signal, FFT_LEN_A, FFT_LEN_R);
+
+    // --- PASS 2: per range bin -> azimuth resample -> azimuth FFT -> detect --
+    // signal is now azimuth-major: row b = range bin b, FFT_LEN_A pulses contiguous.
+PASS2:
+    for (int b = 0; b < FFT_LEN_R; b++) {
+        hls::stream<cplx> s_rs, s_win, s_fft;
+#pragma HLS stream variable=s_rs depth=64
+#pragma HLS stream variable=s_win depth=64
+#pragma HLS stream variable=s_fft depth=64
+        // azimuth source coords for this bin: KC scaled by tan(phi) per pulse.
+        // Resample over the M pulses, apply the azimuth taper, zero-pad to FFT_LEN_A.
+        resample_line(&signal[b * FFT_LEN_A], /*src*/ tanphi, kc, M, M, s_rs);
+        for (int i = 0; i < FFT_LEN_A; i++) {
+#pragma HLS pipeline II=1
+            cplx v;
+            if (i < M) {                              // azimuth taper = win[N:N+M] = hamming(M)
+                v = s_rs.read();
+                v.re *= (data_t)win[N + i]; v.im *= (data_t)win[N + i];
+            } else {
+                v = cplx{0, 0};                       // zero-pad to FFT_LEN_A
+            }
             s_win.write(v);
         }
         int sh;
         fft1d(s_win, s_fft, sh);
-        for (int i = 0; i < FFT_LEN_R; i++) after_range[p * FFT_LEN_R + i] = s_fft.read();
-    }
-
-    // --- CORNER-TURN: transpose via tiled BRAM (range-major -> azimuth-major)
-    // (omitted body: tiled read/write so DDR access stays burst-friendly)
-
-    // --- PASS 2: per range bin -> azimuth resample -> azimuth FFT -> detect --
-PASS2:
-    for (int b = 0; b < FFT_LEN_R; b++) {
-        hls::stream<cplx> s_rs, s_fft;
-#pragma HLS stream variable=s_rs depth=64
-#pragma HLS stream variable=s_fft depth=64
-        // azimuth source coords for this bin: KC scaled by tan(phi) per pulse.
-        resample_line(/*column b*/ &after_range[b], /*src*/ tanphi, kc, M, FFT_LEN_A, s_rs);
-        int sh;
-        fft1d(s_rs, s_fft, sh);
         bfp_shift = sh;
         for (int i = 0; i < FFT_LEN_A; i++) {
 #pragma HLS pipeline II=1
             cplx v = s_fft.read();
-            // detect: magnitude -> uint8 (host applies the dB/percentile view)
-            float mag = hls::sqrtf((float)(v.re * v.re + v.im * v.im));
-            int q = (int)(mag);            // scaling/AGC configured by BFP_SHIFT
-            out[i * FFT_LEN_R + b] = (q > 255) ? 255 : (unsigned char)q;
+            // detect: magnitude -> uint16 (host/CPU applies the dB/percentile AGC;
+            // see M2 risk on AGC scaling). out is azimuth-major OUT buffer.
+            unsigned mag = (unsigned)hls::sqrtf((float)(v.re * v.re + v.im * v.im));
+            ((unsigned short *)out)[b * FFT_LEN_A + i] =
+                (mag > 0xFFFFu) ? 0xFFFFu : (unsigned short)mag;
         }
     }
 }

@@ -1,0 +1,17 @@
+INNER_STARTED
+read_active_probe (no args) ERR: 
+errorInfo: 
+    while executing
+"read_active_probe "
+----
+form1 ERR: ''
+errorInfo1: 
+    while executing
+"read_active_probe -name {SAR_TOP/FFT_BUF_READY} -value_type {hex} "
+----
+CMD list_probe -> ERR: invalid command name "list_probe"
+CMD list_probe_points -> ERR: invalid command name "list_probe_points"
+CMD get_active_probe_list -> ERR: invalid command name "get_active_probe_list"
+CMD get_programmer_info -> OK: 390295AE
+CMD get_device_info -> ERR: invalid command name "get_device_info"
+INNER_DONE
