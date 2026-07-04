@@ -161,3 +161,6 @@ mpfs/fpga/*.log
 *.png
 mpfs/host/*.txt
 Notes.docx
+mpfs/fpga/sim/
+*.qpg
+mpfs/fpga/sim/work*/
