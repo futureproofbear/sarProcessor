@@ -15,7 +15,7 @@ geocoding, GeoTIFF writing) stays on the CPU. Two interchangeable backends:
 
     FpgaBackend  : drives the PolarFire SoC fabric over UIO + DMA. Board only;
                    the compute body is a documented stub until the bitstream
-                   and kernel driver exist (see ../fpga/README.md, ../regmap.md).
+                   and kernel driver exist (see ../../docs/fpga/README.md, ../../docs/regmap.md).
 """
 import numpy as np
 
@@ -47,7 +47,7 @@ class NumpyBackend(AccelBackend):
 class FpgaBackend(AccelBackend):
     """Drives the fabric accelerator on the PolarFire SoC. Board only.
 
-    Intended sequence (see ../regmap.md for the register layout):
+    Intended sequence (see ../../docs/regmap.md for the register layout):
       1. Copy signal + KR grid + KC grid + window into CMA DMA buffers.
       2. Write buffer physical addresses + dims + FFT length to AXI4-Lite regs.
       3. Set CTRL.START; poll STATUS.DONE (or wait on the UIO irq).
@@ -65,7 +65,7 @@ class FpgaBackend(AccelBackend):
         # raises clearly rather than pretending to run.
         raise NotImplementedError(
             "FpgaBackend runs on the PolarFire SoC. Wire it to the bitstream "
-            "and UIO/CMA driver per mpfs/fpga/README.md and mpfs/regmap.md. "
+            "and UIO/CMA driver per ../../docs/fpga/README.md and ../../docs/regmap.md. "
             "Use --backend numpy for the CPU-only reference path."
         )
 
