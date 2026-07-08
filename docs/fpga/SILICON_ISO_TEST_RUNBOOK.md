@@ -191,8 +191,13 @@ AXI read-slave BFM + backpressuring stream sink): reads 600 beats via 4KB-aware 
 IN ORDER under backpressure -> 600/600 errors=0 PASS. Single-outstanding AXI4 read master -> elastic LSRAM
 FIFO -> AXI4-Stream; AXI4-Lite ctrl matches the HLS reg map (+0x08 START, +0x0c src, +0x10 nbeats). Watch:
 `fifo_room` MUST be declared wide (a 1-bit decl truncated 512->0 and the AR branch never fired). PHASE B
-(pending) = swap fft_feeder->fft_feeder_v in SAR_TOP + rebuild; blocked by deleted-.cxf (netlist-splice
-the module in SAR_TOP_NL.vm, OR reconstruct the SmartDesign). For integration the read master's AXI ID
+(pending) = swap fft_feeder->fft_feeder_v in SAR_TOP + rebuild. **NETLIST-SPLICE RULED OUT (2026-07-08):**
+in SAR_TOP_NL.vm the `fft_feeder_top` module is a synthesis-optimized BLOB — its FEED instance wires
+corner_turn's ctrl (start_1/accel_active_1/finish_1=CT_*), detect's ctrl (start_0/..=DET_*), and gearbox
+glue (in_phase/GBX_datai_valid/FFT_BUF_READY, out N_472_i/N_473_i), so replacing the module breaks CT/DET/GBX.
+=> Phase B MUST reconstruct the SAR_TOP SmartDesign (recovery option 2: create_fresh_project.tcl +
+sartop_assembly.tcl, instantiate fft_feeder_v as an HDL core in place of the SmartHLS feeder, re-synth/P&R)
+— documented-fragile, a major multi-step fabric effort. The fix itself (fft_feeder_v) is DONE + proven. For integration the read master's AXI ID
 width must match the DIC initiator port (DIC=8-bit ID -> ID_FIX/sar_axi_idconv -> 4-bit FIC_0; 32-bit addr,
 zero-extended 32->38 by ID_FIX — see AMBA_ARCHITECTURE.md §4).
 
