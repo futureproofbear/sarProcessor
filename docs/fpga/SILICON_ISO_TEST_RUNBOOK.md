@@ -174,10 +174,18 @@ CoreFFT run: input loads fine (`SIG[0]=0x7d000000`), but after arming, **`feeder
 corr≈0. Reproduces at **1 row (4096 beats) too** → a fundamental FIRST-FRAME stall, not a between-frame
 re-arm. Confirms `TIMEOUT_FFT1` is a real feeder/CoreFFT-handshake wedge, NOT a timing artifact (timing
 MET 0/0). BUT this fabric (`SAR_TOP_NL.vm`) has the OLD adapter — the NEW sim-validated
-`corefft_inplace_wrap` (better elastic FIFO + LSRAM show-ahead) is NOT in it. NEXT: (a) SmartDebug the
-stall (probe FEED:out_var_valid, GBX:s_axis_tready/in_phase, FFT:BUF_READY/OUTP_READY/DATAO_VALID —
-find who deasserts ready first), and/or (b) integrate `corefft_inplace_wrap` into a rebuilt fabric to
-test the fix (needs SmartDesign work — the deleted-.cxf blocker).
+`corefft_inplace_wrap` (better elastic FIFO + LSRAM show-ahead) is NOT in it. SmartDebug ROOT-CAUSED it (2026-07-08): the CoreFFT is FINE — `FFT:buf_ready_r=1` (ready, twiddle-init
+done), `sync_ngrst delayLine=1` (out of reset). The wedge is the **`fft_feeder` SmartHLS read master**:
+`FEED/axi4slv_inst/rd_controller` shows `arvalid=0`, `rd_cnt=0`, `rd_data_valid=0`, and the HLS loop
+counter `FEED/…/fft_feeder_BB_4_phi_reg=0` — i.e. the read master **issues ZERO AXI reads** despite
+correct config (readback confirmed `src=0x88000000`, `nbeats=4096` via feeder_diag.gdb) and `busy=1`.
+Config landed, kernel started, but the read engine never fires -> read FIFO empty -> loop stuck at i=0
+-> nothing reaches CoreFFT. This is the SAME class of SmartHLS-2025.2 synth bug as the K_FFT butterfly
+([[m3-pipeline-silicon-status]]): cosim-PASS, silicon-DEAD RTL. The `fft_feeder` was never
+silicon-validated. FIX: replace `fft_feeder` with a hand-written Verilog AXI read-burst master
+(mem->stream, feeding the gearbox) — bypass SmartHLS (unreliable here); needs a fabric rebuild. NOT the
+CoreFFT, NOT clocks, NOT timing, NOT corefft_inplace_wrap. (SmartDebug on libero_corefft_vm/corefft_vm.prjx;
+diag: mpfs/host/jtag_full/feeder_diag.gdb reads the ARG regs back.)
 
 See also `SAR_PIPELINE_STATUS.md` (status + latency roadmap), `SMARTDEBUG_RUNBOOK.md`,
 `LIBERO_HEADLESS_PLAYBOOK.md`, `SAR_PIPELINE_PROCESS.md`.
