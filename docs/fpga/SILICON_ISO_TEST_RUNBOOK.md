@@ -183,9 +183,18 @@ Config landed, kernel started, but the read engine never fires -> read FIFO empt
 -> nothing reaches CoreFFT. This is the SAME class of SmartHLS-2025.2 synth bug as the K_FFT butterfly
 ([[m3-pipeline-silicon-status]]): cosim-PASS, silicon-DEAD RTL. The `fft_feeder` was never
 silicon-validated. FIX: replace `fft_feeder` with a hand-written Verilog AXI read-burst master
-(mem->stream, feeding the gearbox) — bypass SmartHLS (unreliable here); needs a fabric rebuild. NOT the
-CoreFFT, NOT clocks, NOT timing, NOT corefft_inplace_wrap. (SmartDebug on libero_corefft_vm/corefft_vm.prjx;
-diag: mpfs/host/jtag_full/feeder_diag.gdb reads the ARG regs back.)
+(mem->stream, feeding the gearbox) — bypass SmartHLS (unreliable here). NOT the CoreFFT, NOT clocks, NOT
+timing, NOT corefft_inplace_wrap. (SmartDebug on libero_corefft_vm/corefft_vm.prjx; diag:
+mpfs/host/jtag_full/feeder_diag.gdb reads the ARG regs back.)
+**PHASE A DONE (2026-07-08): `mpfs/fpga/fft_feeder_v.v` written + sim-validated** (sim/fft_feeder_v_tb.v,
+AXI read-slave BFM + backpressuring stream sink): reads 600 beats via 4KB-aware multi-burst INCR, streams
+IN ORDER under backpressure -> 600/600 errors=0 PASS. Single-outstanding AXI4 read master -> elastic LSRAM
+FIFO -> AXI4-Stream; AXI4-Lite ctrl matches the HLS reg map (+0x08 START, +0x0c src, +0x10 nbeats). Watch:
+`fifo_room` MUST be declared wide (a 1-bit decl truncated 512->0 and the AR branch never fired). PHASE B
+(pending) = swap fft_feeder->fft_feeder_v in SAR_TOP + rebuild; blocked by deleted-.cxf (netlist-splice
+the module in SAR_TOP_NL.vm, OR reconstruct the SmartDesign). For integration the read master's AXI ID
+width must match the DIC initiator port (DIC=8-bit ID -> ID_FIX/sar_axi_idconv -> 4-bit FIC_0; 32-bit addr,
+zero-extended 32->38 by ID_FIX — see AMBA_ARCHITECTURE.md §4).
 
 See also `SAR_PIPELINE_STATUS.md` (status + latency roadmap), `SMARTDEBUG_RUNBOOK.md`,
 `LIBERO_HEADLESS_PLAYBOOK.md`, `SAR_PIPELINE_PROCESS.md`.
