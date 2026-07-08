@@ -197,7 +197,21 @@ corner_turn's ctrl (start_1/accel_active_1/finish_1=CT_*), detect's ctrl (start_
 glue (in_phase/GBX_datai_valid/FFT_BUF_READY, out N_472_i/N_473_i), so replacing the module breaks CT/DET/GBX.
 => Phase B MUST reconstruct the SAR_TOP SmartDesign (recovery option 2: create_fresh_project.tcl +
 sartop_assembly.tcl, instantiate fft_feeder_v as an HDL core in place of the SmartHLS feeder, re-synth/P&R)
-— documented-fragile, a major multi-step fabric effort. The fix itself (fft_feeder_v) is DONE + proven. For integration the read master's AXI ID
+— documented-fragile, a major multi-step fabric effort. The fix itself (fft_feeder_v) is DONE + proven.
+**PHASE B step 1 DONE (2026-07-08):** `mpfs/fpga/fft_feeder_top.v` — drop-in Verilog wrapper exposing the
+SAME bus interfaces as the HLS core (axi4initiator read master, axi4target 64-bit AXI4 control slave with a
+built-in AXI4->AXI4-Lite/32-bit-lane bridge, out_var stream; clk + active-HIGH reset), wrapping fft_feeder_v.
+Compiles clean; reuse component/User/Private/fft_feeder_top/1.0/fft_feeder_top.xml (same bifs). Register via
+create_hdl_core (like gearbox_idconv_cores.tcl) instead of the HLS create_hdl_plus. VERIFY: IDW + axi4target
+addr width vs CIC target4; read-master AXI ID vs DIC initiator4.
+**PHASE B step 2 BLOCKED (prereqs cleaned):** ALL HLS core outputs (hls_{corner_turn,window,detect,resample,
+fft_feeder,fft_unloader}/hls_output) were deleted in 198f5f8 -> create_fresh_project.tcl can't run (sources
+per-core create_hdl_plus.tcl). Must FIRST regenerate the WORKING cores via SmartHLS `shls hw` (5 cores;
+drop hls_fft_feeder), THEN modify create_fresh_project.tcl (remove hls_fft_feeder from the loop; add
+fft_feeder_top.v via create_hdl_core) + sartop_assembly.tcl (FEED = fft_feeder_top; wiring unchanged:
+axi4initiator->DIC:AXI4minitiator4, axi4target<-CIC:AXI4mtarget4, out_var->GBX), then full build + P&R gate +
+program + iso-test. MSS component (mss_*/ICICLE_MSS.cxz) + COREFFT_C0 gen (libero_corefft) survive. This is a
+multi-hour, board-dependent, fragile FOCUSED SESSION — the drafted fix + wrapper are ready to drop in. For integration the read master's AXI ID
 width must match the DIC initiator port (DIC=8-bit ID -> ID_FIX/sar_axi_idconv -> 4-bit FIC_0; 32-bit addr,
 zero-extended 32->38 by ID_FIX — see AMBA_ARCHITECTURE.md §4).
 
