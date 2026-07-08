@@ -114,7 +114,7 @@ module fft_feeder_v #(
     reg  [FIFO_AW:0]      wptr, rptr;
     wire [FIFO_AW:0]      fcount = wptr - rptr;
     wire fifo_full  = (fcount == (1<<FIFO_AW));
-    wire fifo_room  = ((1<<FIFO_AW) - fcount);             // free slots
+    wire [FIFO_AW:0]      fifo_room = ((1<<FIFO_AW) - fcount);   // free slots (must be wide, not 1-bit!)
     wire fifo_empty = (fcount == 0);
 
     // push read data
