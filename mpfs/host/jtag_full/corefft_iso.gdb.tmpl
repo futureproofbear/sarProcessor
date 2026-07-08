@@ -5,8 +5,10 @@
 ##
 ## Reg map (sar_kernels.h): +0x08 START/STATUS (write 1=start, read 0=done), +0x0c ARG0
 ## (buffer addr), +0x10 ARG1 (nbeats). Word = (re<<16)|im (matches fft_golden hex).
-## Requires: SAR_TOP_corefft bitstream programmed + boot mode 0 (WFI) so hart halts.
-## Placeholders @NBEATS@/@DUMPHEX@/@INBIN@/@OUTBIN@ are filled by run_corefft_iso.sh.
+## Requires (per SILICON_ISO_TEST_RUNBOOK.md): CoreFFT fabric programmed FABRIC-ONLY so the
+## debug APP stays in eNVM (do NOT flash HSS/boot-mode-1 -- JTAG then can't halt), boot mode 0.
+## flush_l2_cache is the app fn: pushes gdb-loaded input L2->DDR (FIC0 non-coherent) before
+## arming, and evicts dst for readback. Placeholders filled by run_corefft_iso.sh.
 set pagination off
 set confirm off
 set architecture riscv:rv64
@@ -17,13 +19,16 @@ monitor reset halt
 monitor mpfs.hart1_u54_1 arp_halt
 thread 2
 monitor resume
-shell C:/ProgramData/Anaconda3-2025.12-1/python.exe -c "import time;time.sleep(20)"
+shell C:/ProgramData/Anaconda3-2025.12-1/python.exe -c "import time;time.sleep(30)"
 monitor mpfs.hart1_u54_1 arp_halt
 
 echo >>> load N known FFT input rows to SIG 0x88000000\n
 restore @INBIN@ binary 0x88000000
 printf ">>> SIG[0..3] (row0 samples 0..3, expect (re<<16)|im): "
 x/4xw 0x88000000
+echo >>> pre-clear SCRATCH[0] + flush input L2->DDR (FIC0 non-coherent)\n
+set *(unsigned int*)0x98000000 = 0
+call (void) flush_l2_cache(1)
 
 echo >>> arm fft_unloader @0x60005000: dst=SCRATCH(0x98000000), nbeats=@NBEATS@, start\n
 set *(unsigned int*)0x60005010 = @NBEATS@
@@ -38,8 +43,8 @@ shell C:/ProgramData/Anaconda3-2025.12-1/python.exe -c "import time;time.sleep(1
 monitor mpfs.hart1_u54_1 arp_halt
 printf ">>> feeder busy(0=done)=%u  unloader busy(0=done)=%u\n", *(unsigned int*)0x60004008, *(unsigned int*)0x60005008
 
-echo >>> flush L2 for coherent readback of fabric-written SCRATCH\n
-call (int)flush_l2_cache(1)
+echo >>> evict dst L2->DDR so the JTAG read sees fabric-written data (FIC0 non-coherent)\n
+call (void) flush_l2_cache(1)
 echo >>> SCRATCH row0 [0..7] (transformed bins):\n
 x/8xw 0x98000000
 echo >>> dump SCRATCH output (@DUMPHEX@ bytes = N rows) for correlation\n
