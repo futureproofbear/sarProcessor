@@ -163,7 +163,21 @@ the **scale-invariant** BFP golden (CoreFFT's block exponent differs by a power 
 absorb it, proven in QuestaSim). Uses the §4 pattern: boot (resume, sleep 30, arp_halt), restore
 input, `flush_l2_cache(1)` (input→DDR), arm feeder/unloader, `flush_l2_cache(1)` (evict dst), dump.
 Offline plumbing self-checks corr=1.0. NOTE: in the CoreFFT build `0x60005000` is the unloader (a
-REAL slave) — in the HLS build it's an unused slave (§2: reading it hangs AXI).
+REAL slave) — in the HLS build it's an unused slave (§2: reading it hangs AXI). Host-path GOTCHA:
+run_corefft_iso.sh must pass **Windows (`C:/`) paths** to the Windows-native gdb (`restore`/`dump`/ELF)
+— MSYS `/c/` paths silently fail "No such file". gdb runs with `-batch </dev/null` so a script error
+can't park it at the prompt for 16 min. `CASES=impulse bash run_corefft_iso.sh` runs one row.
+
+**⚠️ SILICON RESULT 2026-07-08 — the fabric's OLD `corefft_stream64_adapter` WEDGES.** First on-silicon
+CoreFFT run: input loads fine (`SIG[0]=0x7d000000`), but after arming, **`feeder busy=1` never clears /
+`unloader busy=0`** and SCRATCH is unwritten (pre-cleared `SCRATCH[0]` stays 0; rest = stale DDR) →
+corr≈0. Reproduces at **1 row (4096 beats) too** → a fundamental FIRST-FRAME stall, not a between-frame
+re-arm. Confirms `TIMEOUT_FFT1` is a real feeder/CoreFFT-handshake wedge, NOT a timing artifact (timing
+MET 0/0). BUT this fabric (`SAR_TOP_NL.vm`) has the OLD adapter — the NEW sim-validated
+`corefft_inplace_wrap` (better elastic FIFO + LSRAM show-ahead) is NOT in it. NEXT: (a) SmartDebug the
+stall (probe FEED:out_var_valid, GBX:s_axis_tready/in_phase, FFT:BUF_READY/OUTP_READY/DATAO_VALID —
+find who deasserts ready first), and/or (b) integrate `corefft_inplace_wrap` into a rebuilt fabric to
+test the fix (needs SmartDesign work — the deleted-.cxf blocker).
 
 See also `SAR_PIPELINE_STATUS.md` (status + latency roadmap), `SMARTDEBUG_RUNBOOK.md`,
 `LIBERO_HEADLESS_PLAYBOOK.md`, `SAR_PIPELINE_PROCESS.md`.

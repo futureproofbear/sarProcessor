@@ -10,11 +10,13 @@
 # CoreFFT-build firmware (feeder@0x60004000 / unloader@0x60005000 -- sar_kernels.h).
 set -u
 PY="C:/ProgramData/Anaconda3-2025.12-1/python.exe"
-ROOT="/c/Users/lkwangsi/Documents/github/sarProcessor"
+# Windows-format ROOT: python + the Windows-native gdb (restore/dump/ELF) need C:/ paths,
+# NOT MSYS /c/ (which they resolve inconsistently -> "No such file"). git-bash handles C:/ too.
+ROOT="C:/Users/lkwangsi/Documents/github/sarProcessor"
 HOST="$ROOT/mpfs/host"
 GDBDIR="$HOST/jtag_full"
 VEC="$HOST/corefft_vectors"
-CASES="impulse impulse_k dc tone twotone twotone_hidr dc_smalltone random"
+CASES="${CASES:-impulse impulse_k dc tone twotone twotone_hidr dc_smalltone random}"
 NEW="/c/Users/lkwangsi/Tools/openocd-new/xpack-openocd-0.12.0-4"
 SC="/c/Microchip/SoftConsole-v2022.2-RISC-V-747"
 GDB="$SC/riscv-unknown-elf-gcc/bin/riscv64-unknown-elf-gdb.exe"
@@ -56,8 +58,18 @@ fi
 "$NEW/bin/openocd.exe" -s "$NEW/openocd/scripts" --command "set DEVICE MPFS" \
     -f board/microchip_riscv_efp6.cfg -l "$LOG" >/dev/null 2>&1 &
 sleep 14
-"$GDB" "$ELF" -x corefft_iso.gdb 2>&1 | tr -d '\r' \
+# -batch + </dev/null: gdb exits after the script even if a command errors (e.g. DDR not
+# yet initialized) -- prevents a script error from parking gdb at its prompt indefinitely.
+"$GDB" -batch "$ELF" -x corefft_iso.gdb </dev/null 2>&1 | tr -d '\r' \
     | grep -avE '^Reading|warranty|GPL|free soft|GNU gdb|Copyright|documentation|bug report|configured as|^Type |sifive|For help|apropos'
+# openocd may still be up if the script errored before 'monitor shutdown' -- clean it via telnet.
+python - <<'PYEOF' 2>/dev/null || true
+import socket,time
+try:
+    s=socket.create_connection(('127.0.0.1',4444),timeout=3); time.sleep(0.3); s.recv(4096)
+    s.sendall(b'shutdown\n'); time.sleep(0.5); s.close()
+except Exception: pass
+PYEOF
 echo ">>> gdb done (openocd shut down via monitor shutdown)"
 
 # 5) split the readback into rows + correlate each vs the golden (scale-invariant)
