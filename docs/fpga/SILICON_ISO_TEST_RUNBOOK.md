@@ -131,5 +131,39 @@ Hard-won from the 2026-07-04 all-zero-image debug (see SAR_PIPELINE_STATUS.md):
   rebuild is ~1.5 min. Push logic to firmware during bring-up whenever correctness allows — it turned an
   intractable multi-rebuild loop into minutes-per-iteration.
 
+## 8. CoreFFT in-place range-FFT (fabric FFT, 2026-07-08) — build + iso-test
+Sub-project to run the range-FFT on the **in-place CoreFFT** (8192-pt, 16-bit, conditional BFP)
+instead of the CPU FFT. Wrapper `mpfs/fpga/corefft_inplace_wrap.v` (elastic LSRAM FIFO + SCALE_EXP)
+is sim-validated vs the real core (see memory `corefft-streaming-vs-inplace`). CoreFFT STREAMING
+maxes at 4096-pt + no BFP → 8192 REQUIRES in-place.
+
+**Rebuild the CoreFFT bitstream (headless, ~1 hr, timing-gated):** the `libero_sar` SmartDesign is
+the deleted-`.cxf` state, so use the VM-netlist flow — `libero.exe SCRIPT:mpfs/fpga/build_corefft_vm.tcl`
+(fresh project `libero_corefft_vm`, `-vm_netlist_flow TRUE`, imports the surviving 62.5-MHz
+`SAR_TOP_NL.vm`, associates `SAR_TOP_derived_constraints.sdc` (has the 62.5/7.8125 `create_generated_clock`)
++ `sar_fft_cdc.sdc` + `io/sar_io.pdc`, P&R, gate on `pinslacks.txt`, export). Result: **TIMING MET 0/0
+(315,348 pins) → `SAR_TOP_corefft.job` (12.12 MB, FABRIC+SNVM)**. Preserved at
+`mpfs/fpga/bitstreams/SAR_TOP_corefft.job`. GOTCHAS: `new_project` rejects `-instantiate_mss_component`
+(use the minimal signature); `export_prog_job` needs `file mkdir $exportdir` first; the `.tcl` runs
+setup-only first (`STOP_AFTER_SETUP 1`) to fail-fast on API errors before the ~1 hr P&R.
+
+**⚠️ PROGRAM IT RIGHT (the mistake to never repeat):** program the fabric **FABRIC-ONLY**
+(`SAR_TOP_corefft.job`, no eNVM), then **re-flash the APP** to eNVM with `bash mpfs/host/run_program.sh`
+(`mpfsBootmodeProgrammer` --bootmode 1, via `fpgenprog` — reliable, NOT OpenOCD). **Boot mode 1 + the
+APP is the debug state — the app cooperates with JTAG halt.** Do NOT build/flash an **HSS** eNVM
+(`build_corefft_bootable.tcl` / boot-mode-1 HSS client): HSS does NOT cooperate with JTAG halt →
+`openocd: "Target not halted" / gdb connection rejected`, and you must power-cycle. Re-flashing the
+app is REQUIRED after any fabric program that touches eNVM (§6). `mpfs/fpga/bm1/` is run_program.sh's
+working dir — `mkdir` it if a cleanup removed it.
+
+**Run the CoreFFT iso-test:** `bash mpfs/host/run_corefft_iso.sh` — generates 8 known 8192-pt rows
+(`fft_golden.py`), loads to `SIG`, drives `fft_feeder(0x60004000)→CoreFFT→fft_unloader(0x60005000)`
+directly over JTAG (`jtag_full/corefft_iso.gdb.tmpl`), reads back `SCRATCH`, correlates each row vs
+the **scale-invariant** BFP golden (CoreFFT's block exponent differs by a power of 2 — corr/nrmse
+absorb it, proven in QuestaSim). Uses the §4 pattern: boot (resume, sleep 30, arp_halt), restore
+input, `flush_l2_cache(1)` (input→DDR), arm feeder/unloader, `flush_l2_cache(1)` (evict dst), dump.
+Offline plumbing self-checks corr=1.0. NOTE: in the CoreFFT build `0x60005000` is the unloader (a
+REAL slave) — in the HLS build it's an unused slave (§2: reading it hangs AXI).
+
 See also `SAR_PIPELINE_STATUS.md` (status + latency roadmap), `SMARTDEBUG_RUNBOOK.md`,
 `LIBERO_HEADLESS_PLAYBOOK.md`, `SAR_PIPELINE_PROCESS.md`.
