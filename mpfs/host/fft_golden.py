@@ -102,14 +102,29 @@ def _cases(n):
     k = np.arange(n)
     rng = np.random.default_rng(1234)
     scale = 2000.0
+    kimp = 37 % n                                                          # non-trivial impulse pos
     return {
         "impulse": (np.where(k == 0, scale, 0)).astype(np.complex128),     # flat spectrum
-        "dc":      np.full(n, scale, dtype=np.complex128),                  # bin-0 spike
-        "tone":    scale * np.exp(2j * np.pi * (n // 8) * k / n),           # single bin
+        "dc":      np.full(n, scale, dtype=np.complex128),                 # bin-0 spike
+        "tone":    scale * np.exp(2j * np.pi * (n // 8) * k / n),          # single bin
         "twotone": scale * (np.exp(2j * np.pi * 5 * k / n)
                             + 0.5 * np.exp(2j * np.pi * (n // 3) * k / n)),
         "random":  (scale * (rng.standard_normal(n) + 1j * rng.standard_normal(n))
                     / np.sqrt(2)).astype(np.complex128),
+        # ---- failure-targeting additions ----
+        # impulse at n=k -> rotating phasor exp(-j2pi k kimp/N): tests twiddle PHASE
+        # (a butterfly that drops the twiddle term gives flat magnitude but wrong phase).
+        "impulse_k": (np.where(k == kimp, scale, 0)).astype(np.complex128),
+        # 60 dB two-tone: the BFP scale is set by the STRONG bin; a datapath that floors
+        # small values (the old per-stage >>1 bug) loses the weak bin -> corr vs the
+        # BFP golden (which keeps it) drops. Weak-bin survival also visible in *_out.csv.
+        "twotone_hidr": scale * (np.exp(2j * np.pi * 11 * k / n)
+                                 + 1e-3 * np.exp(2j * np.pi * (n // 3) * k / n)),
+        # strong DC clutter + weak AC target (SAR-realistic dynamic range): same flooring
+        # guard as twotone_hidr but with the strong component at bin 0.
+        "dc_smalltone": (scale * np.ones(n)
+                         + 1e-3 * scale * np.exp(2j * np.pi * (n // 5) * k / n)
+                         ).astype(np.complex128),
     }
 
 
