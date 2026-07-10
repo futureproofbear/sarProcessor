@@ -54,26 +54,32 @@ module corefft_stream64_adapter #(parameter integer W = 16, parameter integer PO
     // Depth 64 gives ~20x margin over the observed peak occupancy (3 beats in sim). syn_ramstyle=
     // registers forces an FF+mux (distributed logic), NOT an LSRAM -- an LSRAM's registered read
     // would add a cycle of latency and break this combinational-read handshake (silicon-only bug).
-    localparam integer FDEPTH = 64;                        // beats (peak seen = 3)
+    localparam integer FDEPTH = 64;                        // beats
     localparam integer FAW    = 6;                         // log2(64)
+    localparam integer LAT_MARGIN = 8;                     // beats reserved for CoreFFT DATAO in-flight
     (* syn_ramstyle = "registers" *)
     reg  [4*W-1:0] fifo [0:FDEPTH-1];
     reg  [FAW:0]   wptr, rptr;                             // MSB distinguishes full vs empty
     wire [FAW:0]   fcount = wptr - rptr;
-    wire fifo_full  = (fcount == FDEPTH[FAW:0]);
     wire fifo_empty = (fcount == 0);
 
     reg          have_lo;
     reg [2*W-1:0] lo;
-    // Read CoreFFT whenever it has output; only stall the pair-COMPLETING sample if the FIFO
-    // is full (would have nowhere to push the formed beat). The pair-STARTING sample never
-    // needs FIFO room, so read_outp stays high through almost all of the unload.
-    assign read_outp = outp_ready & ~(have_lo & fifo_full);
+    // De-assert read_outp LAT_MARGIN beats BEFORE the FIFO is full, reserving room for the
+    // DATAO_VALID beats already in the CoreFFT output pipeline. CoreFFT's DATAO_VALID trails
+    // READ_OUTP by ~4 cycles (fftSm.v:595-603), so ~2 beats keep arriving AFTER read_outp
+    // de-asserts. Those in-flight beats MUST still be captured (see the capture block below:
+    // gated on datao_valid, NOT read_outp) -- gating capture on read_outp drops them, losing
+    // samples and flipping the re/im pairing (have_lo) for the rest of the frame. That is the
+    // silicon range-FFT starvation bug: the fft_unloader never receives its full 4096 beats
+    // and hangs (busy=1, SCRATCH=0). Reproduced + fixed in corefft_stream64_lossck_tb.v.
+    wire fifo_almost_full = (fcount >= (FDEPTH - LAT_MARGIN));
+    assign read_outp = outp_ready & ~fifo_almost_full;
 
     always @(posedge clk or negedge resetn) begin
         if (!resetn) begin have_lo <= 1'b0; wptr <= 0; end
-        else if (outp_ready & read_outp & datao_valid) begin
-            if (!have_lo) begin
+        else if (outp_ready & datao_valid) begin                  // capture EVERY emitted sample
+            if (!have_lo) begin                                   // (in-flight beats too -- NOT gated on read_outp)
                 lo <= {datao_re, datao_im}; have_lo <= 1'b1;      // hold lower sample
             end else begin
                 fifo[wptr[FAW-1:0]] <= {datao_re, datao_im, lo};  // form + push beat

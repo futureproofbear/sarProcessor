@@ -8,8 +8,12 @@
 #ifndef DN
 #define DN (8192*8192)
 #endif
-static inline int16_t hi16(uint32_t x){ return (int16_t)(x >> 16); }
-static inline int16_t lo16(uint32_t x){ return (int16_t)(x & 0xFFFF); }
+// Branchless sign-extension of a 16-bit field to int32. Used for BOTH halves so SmartHLS cannot
+// synthesize the I (high) and Q (low) paths differently: the previous `(int16_t)(x>>16)` was
+// mis-synthesized (I treated as UNSIGNED -> negative I saturated detect on silicon; Q was fine).
+static inline int32_t sext16(uint32_t u){ u &= 0xFFFFu; return (int32_t)(u ^ 0x8000u) - 0x8000; }
+static inline int32_t hi16(uint32_t x){ return sext16(x >> 16); }
+static inline int32_t lo16(uint32_t x){ return sext16(x); }
 
 static inline uint32_t isqrt(uint64_t v) {           // floor(sqrt(v))
     // Classic digit-by-digit integer sqrt: only FIXED shifts (>>2, >>1) and

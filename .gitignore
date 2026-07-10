@@ -60,6 +60,12 @@ mpfs/fpga/libero_fresh/
 mpfs/fpga/libero_tdest/
 mpfs/fpga/libero_corefft/
 mpfs/fpga/libero_corefft256/
+mpfs/fpga/libero_corefft_vm/
+mpfs/fpga/libero_ffv/
+mpfs/fpga/libero_ffv_gbxfix_bak/
+mpfs/fpga/baselines_backup_*/
+mpfs/fpga/*.stdout.txt
+mpfs/host/jtag_full/*.run.gdb
 # Generated IP / MSS / HSS component output
 mpfs/fpga/component/
 mpfs/fpga/mss_min/

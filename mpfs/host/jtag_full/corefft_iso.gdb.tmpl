@@ -39,15 +39,29 @@ set *(unsigned int*)0x60004010 = @NBEATS@
 set *(unsigned int*)0x6000400c = 0x88000000
 set *(unsigned int*)0x60004008 = 1
 
-shell C:/ProgramData/Anaconda3-2025.12-1/python.exe -c "import time;time.sleep(10)"
+## --- progress probe: read busy at 2s and 10s to see if the chain moves or is stuck ---
+shell C:/ProgramData/Anaconda3-2025.12-1/python.exe -c "import time;time.sleep(2)"
 monitor mpfs.hart1_u54_1 arp_halt
-printf ">>> feeder busy(0=done)=%u  unloader busy(0=done)=%u\n", *(unsigned int*)0x60004008, *(unsigned int*)0x60005008
+printf ">>> t=2s  feeder busy(0=done)=%u  unloader busy(0=done)=%u\n", *(unsigned int*)0x60004008, *(unsigned int*)0x60005008
+shell C:/ProgramData/Anaconda3-2025.12-1/python.exe -c "import time;time.sleep(8)"
+monitor mpfs.hart1_u54_1 arp_halt
+printf ">>> t=10s feeder busy(0=done)=%u  unloader busy(0=done)=%u\n", *(unsigned int*)0x60004008, *(unsigned int*)0x60005008
 
-echo >>> evict dst L2->DDR so the JTAG read sees fabric-written data (FIC0 non-coherent)\n
-call (void) flush_l2_cache(1)
-echo >>> SCRATCH row0 [0..7] (transformed bins):\n
+## --- HANG-PROOF: capture busy + a raw JTAG SCRATCH read/dump BEFORE any CPU flush.
+## If the fabric wedged an AXI transaction, flush_l2_cache() hangs the CPU un-haltably and
+## nothing after it runs -- so grab everything decisive FIRST. Raw JTAG DDR reads may see
+## stale L2 (FIC0 non-coherent) but still reveal whether the unloader wrote anything.
+echo >>> RAW (pre-flush) SCRATCH row0 [0..7]:\n
 x/8xw 0x98000000
-echo >>> dump SCRATCH output (@DUMPHEX@ bytes = N rows) for correlation\n
+echo >>> RAW (pre-flush) dump SCRATCH -> OUTBIN (may be stale-L2 but hang-proof)\n
+dump binary memory @OUTBIN@ 0x98000000 (0x98000000 + @DUMPHEX@)
+
+## --- now attempt the coherent evict (LAST, because it may hang on a wedged fabric txn) ---
+echo >>> evict dst L2->DDR (flush_l2_cache -- HANGS if fabric AXI wedged; data already dumped above)\n
+call (void) flush_l2_cache(1)
+echo >>> COHERENT SCRATCH row0 [0..7] (transformed bins):\n
+x/8xw 0x98000000
+echo >>> COHERENT dump SCRATCH -> OUTBIN (overwrites raw dump when flush succeeds)\n
 dump binary memory @OUTBIN@ 0x98000000 (0x98000000 + @DUMPHEX@)
 monitor resume
 monitor shutdown
