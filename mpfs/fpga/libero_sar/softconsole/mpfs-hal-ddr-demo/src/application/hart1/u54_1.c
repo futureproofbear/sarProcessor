@@ -369,6 +369,14 @@ void u54_1(void)
             __asm volatile ("fence rw, rw");
             mbx->cmd    = 0u;
             __asm volatile ("fence rw, rw");
+        } else if (mbx->cmd == 0x53434C45u) {   /* 'SCLE': SCALE_EXP-capture isolation test (keeps symbol; GDB-callable) */
+            mbx->result = (uint32_t)sar_fabric_scale_test();
+            __asm volatile ("fence rw, rw");
+            mbx->status = MBX_DONE_MAGIC;
+            mbx->seq    = mbx->seq + 1u;
+            __asm volatile ("fence rw, rw");
+            mbx->cmd    = 0u;
+            __asm volatile ("fence rw, rw");
         }
     }
 }

@@ -40,7 +40,9 @@ print(f"  input image: {len(cases)} rows, {len(buf)} bytes")
 PYEOF
 
 NROWS=$(echo $CASES | wc -w)
-BEATS=$((NROWS * 4096))            # 8192 samples/row / 2 samples per 64-bit beat
+# NBEATS_OVERRIDE lets a diagnostic run fire a tiny single-burst read (e.g. 64 beats) to
+# isolate a first-AR FIC0/DDR wedge (addr/ID routing) from a mid-stream count/4KB-boundary bug.
+BEATS=${NBEATS_OVERRIDE:-$((NROWS * 4096))}   # 8192 samples/row / 2 samples per 64-bit beat
 BYTES=$((NROWS * 32768))           # 8192 samples/row * 4 bytes/sample
 DUMPHEX=$(printf '0x%x' $BYTES)
 
@@ -82,6 +84,10 @@ N = 8192
 print(f"\n{'case':14} | silicon CoreFFT vs BFP golden")
 allpass = True
 for i, c in enumerate(cases):
+    if (i + 1) * N * 4 > len(raw):
+        print(f"{c:14} | (dump truncated: have {len(raw)} bytes, need {(i+1)*N*4}) -- SKIP")
+        allpass = False
+        continue
     words = struct.unpack_from(f'<{N}I', raw, i * N * 4)
     (vec / f"{c}_rtl.hex").write_text("\n".join(f"{w:08x}" for w in words) + "\n")
     r = subprocess.run([sys.executable, golden,

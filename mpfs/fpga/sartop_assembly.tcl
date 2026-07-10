@@ -118,6 +118,9 @@ catch { sd_connect_pins -sd_name $sd -pin_names {"FFT:DATAO_IM"    "GBX:datao_im
 catch { sd_connect_pins -sd_name $sd -pin_names {"FFT:DATAO_VALID" "GBX:datao_valid"} }
 catch { sd_connect_pins -sd_name $sd -pin_names {"FFT:OUTP_READY"  "GBX:outp_ready"} }
 catch { sd_connect_pins -sd_name $sd -pin_names {"GBX:read_outp"   "FFT:READ_OUTP"} }
+## fan OUTP_READY out to the feeder too: it latches SCALE_EXP on OUTP_READY's falling edge
+## (frame boundary) so the CPU can read each row's block exponent for the global renormalize.
+catch { sd_connect_pins -sd_name $sd -pin_names {"FFT:OUTP_READY"  "FEED:outp_ready_in"} }
 ## CoreFFT output stream (gearbox 64-bit master) -> fft_unloader AXI4-Stream SLAVE. The unloader
 ## drains the WHOLE frame in one continuous run (no descriptors, no per-transform re-arm, no TLAST),
 ## so there is never a "2nd back-to-back transaction" for a stream target FSM to deadlock on.
@@ -129,7 +132,10 @@ catch { sd_mark_pins_unused -sd_name $sd -pin_names {GBX:m_axis_tlast} }
 catch { sd_mark_pins_unused -sd_name $sd -pin_names {GBX:m_axis_tdest} }
 
 ## ---------------- misc + MSS ----------------
-sd_mark_pins_unused -sd_name $sd -pin_names {FFT:SCALE_EXP}
+## CoreFFT block-floating-point exponent -> feeder capture register (0x14). Was unused; now the
+## firmware reads it per row to reconstruct the CPU FFT's global block exponent (fix the per-row
+## BFP that corrupts the 2-D image -- corr~0 -> expect ~0.99 after the global renormalize).
+catch { sd_connect_pins -sd_name $sd -pin_names {"FFT:SCALE_EXP" "FEED:scale_exp_in"} }
 catch { sd_connect_pins_to_constant -sd_name $sd -pin_names {MSS:MSS_INT_F2M} -value {GND} }
 sd_mark_pins_unused -sd_name $sd -pin_names {MSS:MSS_INT_M2F}
 sd_connect_instance_pins_to_ports -sd_name $sd -instance_name {MSS}

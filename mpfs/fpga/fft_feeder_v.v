@@ -61,9 +61,28 @@ module fft_feeder_v #(
     // ---- AXI4-Stream master to the gearbox ----
     output wire [AXI_DATA_W-1:0]    m_axis_tdata,
     output wire                     m_axis_tvalid,
-    input  wire                     m_axis_tready
+    input  wire                     m_axis_tready,
+
+    // ---- CoreFFT block-floating-point exponent capture (for the pipeline's global-block-
+    // exponent renormalize; see sar_sequencer.c fft_fabric_pass). CoreFFT drives SCALE_EXP
+    // (valid while OUTP_READY asserted, per the UG); we latch it at each frame boundary
+    // (OUTP_READY falling edge) and expose the last frame's exponent at control reg 0x14.
+    // With PER-ROW arming the CPU reads reg 0x14 after each row -> that row's exp_i. ----
+    input  wire [3:0]               scale_exp_in,
+    input  wire                     outp_ready_in
 );
     localparam integer BYTES_PER_BEAT = AXI_DATA_W/8;      // 8
+
+    // ---- SCALE_EXP latch: capture on OUTP_READY falling edge, hold until next frame ----
+    reg [3:0] scale_exp_latched;
+    reg       outp_ready_d;
+    always @(posedge clk or negedge resetn) begin
+        if (!resetn) begin scale_exp_latched <= 4'd0; outp_ready_d <= 1'b0; end
+        else begin
+            outp_ready_d <= outp_ready_in;
+            if (outp_ready_d & ~outp_ready_in) scale_exp_latched <= scale_exp_in;  // falling edge
+        end
+    end
 
     // ===================== AXI4-Lite control registers =====================
     reg [AXI_ADDR_W-1:0] src_base;      // ARG0 @0x0c
@@ -101,6 +120,7 @@ module fft_feeder_v #(
                 12'h008: s_rdata <= {31'd0, busy};
                 12'h00c: s_rdata <= src_base;
                 12'h010: s_rdata <= nbeats;
+                12'h014: s_rdata <= {28'd0, scale_exp_latched};  // last frame's CoreFFT SCALE_EXP
                 default: s_rdata <= 32'd0;
             endcase
         end else if (s_rvalid & s_rready) begin

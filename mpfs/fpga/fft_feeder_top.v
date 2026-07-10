@@ -61,7 +61,13 @@ module fft_feeder_top #(parameter integer IDW = 4) (
     // ---- AXI4-Stream output to the gearbox ----
     output wire [63:0] out_var,
     output wire        out_var_valid,
-    input  wire        out_var_ready
+    input  wire        out_var_ready,
+
+    // ---- CoreFFT block-floating-point exponent capture (routed from FFT:SCALE_EXP and
+    // FFT:OUTP_READY). Latched per frame, read back at control reg 0x14 for the pipeline's
+    // global-block-exponent renormalize (sar_sequencer.c). ----
+    input  wire [3:0]  scale_exp_in,
+    input  wire        outp_ready_in
 );
     wire resetn = ~reset;                      // fft_feeder_v is active-low
 
@@ -108,6 +114,8 @@ module fft_feeder_top #(parameter integer IDW = 4) (
         .m_rid({IDW{1'b0}}), .m_rdata(axi4initiator_r_data), .m_rlast(axi4initiator_r_last),
         .m_rvalid(axi4initiator_r_valid), .m_rready(axi4initiator_r_ready),
         // stream out
-        .m_axis_tdata(out_var), .m_axis_tvalid(out_var_valid), .m_axis_tready(out_var_ready)
+        .m_axis_tdata(out_var), .m_axis_tvalid(out_var_valid), .m_axis_tready(out_var_ready),
+        // CoreFFT block-exponent capture
+        .scale_exp_in(scale_exp_in), .outp_ready_in(outp_ready_in)
     );
 endmodule
