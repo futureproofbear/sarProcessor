@@ -175,3 +175,6 @@ mpfs/fpga/sim/work*/
 mpfs/host/jtag_stage_deci1/
 *.bin
 docs/fpga/SAR_ARCHITECTURE_REPORT.pdf
+
+# build console logs (generated)
+*.console.txt
