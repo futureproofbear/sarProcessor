@@ -170,3 +170,8 @@ Notes.docx
 mpfs/fpga/sim/
 *.qpg
 mpfs/fpga/sim/work*/
+
+# large JTAG DDR dumps (silicon OUT extraction, regenerable)
+mpfs/host/jtag_stage_deci1/
+*.bin
+docs/fpga/SAR_ARCHITECTURE_REPORT.pdf
