@@ -19,6 +19,15 @@ debugging time; check here before assuming your design is at fault. Detail + evi
   it branchless + symmetric for both halves — `sext16(u)=(int32_t)((u&0xFFFF)^0x8000)-0x8000`. LESSON:
   after any HLS rebuild, value-check a kernel's output on silicon (not just cosim/corr); casts and
   sign-extension are the usual miscompile sites. [[detect-signext-bug-fabric-corr0]]
+  - **UPDATE 2026-07-11: the branchless `sext16` fix did NOT survive synthesis either.** Rebuilt the
+    fabric (TIMING MET, fresh detect RTL confirmed in the bitstream, digest changed) + programmed +
+    value-checked on silicon: negative-I pixels STILL saturate 0xFFFF (49.9% sat, corr 0.12 vs 0.97
+    for CPU detect). SmartHLS optimizes away the high-16 sign no matter how the C is written (plain
+    cast AND branchless XOR-sub both fail). DON'T keep iterating C formulations blindly — each is a
+    ~35 min rebuild. Working paths: (1) **CPU detect** (`detect_mode=1`, MSS `sqrt` — proven 0.97,
+    the shipping path); (2) hand-write the detect in Verilog (mem→mem, guaranteed sign); (3) try
+    `ap_int<16>` (SmartHLS-native signed) if a fabric-detect performance win is truly needed — but
+    de-risk in a QuestaSim TB BEFORE another fabric rebuild.
 - HLS cores are registered into Libero via each kernel's `hls_output/scripts/libero/create_hdl_plus.tcl`
   (`shls hw` regenerates them); a plain Verilog module uses `create_hdl_core` + `hdl_core_add_bif` /
   `hdl_core_assign_bif_signal` instead (see `feeder_v_core.tcl`).

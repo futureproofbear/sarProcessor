@@ -360,9 +360,10 @@ sar_seq_status_t sar_form_image(uint32_t spin_limit)
     sar_stage_ts[5] = readmtime();
 
     /* 6) detect (sqrt(I^2+Q^2)): SIG -> OUT (azimuth-FFT output is in SIG).
-     * DETECTMODE 1 = CPU detect (correct sqrt) -- the fabric detect HLS mis-synthesizes negative-I
-     * sign extension, saturating ~50% of pixels; CPU path confirms the image without a rebuild. */
-    if (*(volatile uint32_t *)(uintptr_t)SAR_DETECTMODE_ADDR == 1u) {
+     * DEFAULT = CPU detect (correct sqrt, corr 0.97 on silicon -- the SHIPPING path). The fabric
+     * detect HLS is UNFIXABLE via SmartHLS (it mis-synthesizes the negative-I sign extension no
+     * matter how detect.cpp is written -> ~50% saturation); DETECTMODE 2 selects it for testing only. */
+    if (*(volatile uint32_t *)(uintptr_t)SAR_DETECTMODE_ADDR != 2u) {
         flush_l2_cache(1u);                                  /* read fabric-written SIG from DDR */
         cpu_detect(BUF_SIG, BUF_OUT, SAR_GRID * SAR_GRID);
         flush_l2_cache(1u);                                  /* push OUT to DDR for JTAG readback */
