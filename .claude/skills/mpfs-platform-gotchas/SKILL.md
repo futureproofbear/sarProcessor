@@ -56,7 +56,13 @@ quirk, not your RTL/firmware.
 - **Verify TIMING MET (setup + hold)** before trusting any silicon result — Libero programs failing
   bitstreams silently.
 - **SmartHLS mem↔stream kernels are dead RTL on this toolchain** — the feeder (mem→stream) and any
-  stream-master output must be hand-written Verilog. (mem→mem HLS kernels are fine.)
+  stream-master output must be hand-written Verilog. (mem→mem HLS kernels are fine.) Also value-check
+  every HLS kernel's OUTPUT on silicon after a rebuild — casts/sign-extension miscompile silently
+  (the detect `(int16_t)(x>>16)` read unsigned; cosim + corr both passed).
+- **CPU-FALLBACK to isolate a suspect fabric kernel**: reimplement it on the MSS behind a runtime mode
+  flag (detect_mode/fft_mode) and A/B vs the fabric — isolates the fault AND gives a working silicon
+  fallback with no fabric rebuild. Firmware-only edits: `make all` (SoftConsole `build_tools/bin`) →
+  `run_program.sh` (mpfsBootmodeProgrammer). See silicon-debug-methodology.md §5a.
 - **eNVM**: never use boot auto-program/auto-update (ES §3.11); flash via `mpfsBootmodeProgrammer`
   (boot mode 1 = app that cooperates with JTAG halt; boot mode 0 = WFI).
 - **Read the IP User Guide + golden TB first** (`reference/*_UG.txt`); most "hard IP" stalls are a

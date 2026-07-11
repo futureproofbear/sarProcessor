@@ -57,6 +57,17 @@ fabric kernel / firmware pipeline on silicon.
 - CoreFFT SCALE_EXP ≠ `fixedpoint` block exponent — CoreFFT does ~unconditional 1/N scaling; its
   SCALE_EXP reports a different (smaller) quantity. Don't compare `sar_row_exp` to `fft1d_bfp` exps.
 
+## 5a. CPU-FALLBACK pattern — isolate a suspect fabric kernel WITHOUT a rebuild
+- When an HLS fabric kernel is suspect, reimplement it on the MSS CPU behind a runtime mode flag
+  (e.g. `detect_mode`, `fft_mode`) and A/B it against the fabric version. This does two things at once:
+  (a) ISOLATES the bug — if the CPU version fixes the image, the fault is in that fabric kernel;
+  (b) gives a WORKING FALLBACK on silicon immediately (no ~1-2 h fabric rebuild to prove the fix).
+  `cpu_detect` (correct signed sqrt) confirmed the detect sign-ext bug end-to-end → board hit corr
+  0.97 with fabric-FFT + CPU-detect, before touching the fabric. GCC compiles the sign-extension the
+  SmartHLS synthesis got wrong, so the CPU version is also the reference for what the fabric SHOULD do.
+- Coherency for a CPU-side kernel reading fabric-written DDR: `flush_l2_cache(1)` before the read
+  (evict stale L2) and after the write (push result to DDR for the next kernel / JTAG readback).
+
 ## 6. SAR image display (not a datapath concern, but expected differences vs Umbra GEC)
 - Our output is SINGLE-LOOK raw magnitude; Umbra's GEC is multi-looked + geocoded + 8-bit display-tuned.
   The speckle difference is single-look, not a bug (fixed-point matches float at corr 0.9992).

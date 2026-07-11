@@ -48,6 +48,17 @@ debugging time; check here before assuming your design is at fault. Detail + evi
 - Invoke headless: `libero.exe "SCRIPT:x.tcl" "LOGFILE:x.log"`. It spawns synbatch/pa_designer children;
   watch the log (flushes live). Program via `run_tool PROGRAMDEVICE`.
 
+## SoftConsole 2022.2 (firmware build + flash)
+- `make` lives at `$SC/build_tools/bin/make.exe` (underscore `build_tools`, NOT `build-tools`); the
+  riscv toolchain at `$SC/riscv-unknown-elf-gcc/bin`. Put BOTH on PATH, then build with **`make all`**
+  in the `Icicle-Kit-DDR-666MHz-eNVM-Scratchpad-Release/` dir — a bare `make` resolves a stray
+  single-object target and produces no ELF. The ELF is `.../Release/mpfs-hal-ddr-demo.elf`.
+- Reflash eNVM with the new ELF via `mpfs/host/run_program.sh` (copies ELF→`bm1/app.elf`, runs
+  `mpfsBootmodeProgrammer.jar --bootmode 1 --die MPFS250T_ES --package FCVG484`, uses fpgenprog not
+  openocd). Firmware-only changes don't need a fabric rebuild — edit → `make all` → run_program.sh → run.
+- Wall-clock timing in firmware: `readmtime()` reads CLINT MTIME at **1 MHz** (`LIBERO_SETTING_MSS_RTC_TOGGLE_CLK`)
+  → 1 tick = 1 µs. `sar_form_image` stamps `sar_stage_ts[0..6]`; host diffs for per-stage µs.
+
 ## FlashPro6 (FP6) over J33
 - **JTAG bulk-load ceiling ~84 kbit/s** (~111 s/MB), latency-bound by the USB-HID, not bandwidth. 15 MHz
   TCK corrupts the DM (use 4 MHz). 97 MB ≈ 2.7 h → chunk + on-target CRC. [[jtag-bulk-load-rate-ceiling]]
