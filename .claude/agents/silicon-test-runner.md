@@ -22,6 +22,14 @@ Hard rules (from the runbook + memory):
   `-c "telnet_port 4444"` if you need graceful mid-run stop). If you are forced to kill,
   kill gdb (client) first, then openocd, and know the FlashPro6 may need a USB replug +
   board power-cycle to recover (a board power-cycle ALONE does not clear an FP6 wedge).
+- NEVER wrap a board run in an external `timeout`/SIGTERM — killing gdb mid-JTAG wedges the
+  FABRIC (a kernel stuck mid-AXI; hart `reset halt` does NOT clear it → needs power-cycle).
+  Instead RUN THE JOB IN THE BACKGROUND so it self-terminates via its own `monitor shutdown`;
+  give the gdb poll loop a generous internal budget; poll the gdb/openocd logfile for progress.
+- This gdb build (SoftConsole riscv64 8.3.0) CRASHES on `call <fn>` (find_inferior_pid assertion)
+  if the hart is mid-execution (a poll loop that timed out). Guard every `call flush_l2_cache` /
+  inferior call behind a `$done`-flag check so it runs ONLY when the hart is cleanly halted at the
+  completion flag; put a raw pre-flush `x/`/`dump` first as a hang-proof fallback.
 - Single frame per diagnostic: prefer `CASES=impulse` (one 8192-pt frame). Multi-frame runs can
   wedge FIC0 and hang `flush_l2_cache` ~5 min. Use `NBEATS_OVERRIDE=64` for a single-burst probe.
 - Coherent DDR read: FIC0 is non-coherent — `call flush_l2_cache(1)` to push input L2->DDR
@@ -32,9 +40,22 @@ Hard rules (from the runbook + memory):
   pipe hides progress — watch the openocd log (flushes live) to tell "progressing" from "wedged".
 - Windows-native gdb needs `C:/...` paths (not MSYS `/c/...`) for restore/dump/ELF.
 
+Report by VALUE, not just correlation: a magnitude/corr check is scale/phase/orientation-invariant
+and hides real bugs. Report the actual complex SCRATCH sample values and diff them against a
+bit-accurate model (`silicon_emulator.py` / `fixedpoint`). Before ever calling a silicon result a
+"divergence from golden", run an EXHAUSTIVE orientation scan (board = fft2.T + fftshift/flip +
+row/col offset) — a naive band comparison read corr 0.06 on a CORRECT image that scanned to 0.97.
+
+Value-test entry points (no fabric rebuild): mailbox @0xB0058000 (result @0x..0C, done
+@0x..10==0xC0FFEE03); 'FTES' (0x46544553) runs `fft_pass(BUF_SIG→BUF_SCRATCH)` on JTAG-preloaded
+SIG (prefer over slow 'SCLE'); runtime knobs fft_mode @0xB0059110, headroom @0xB0059114, detect_mode
+@0xB0059118 (1=CPU detect, correct-sqrt fallback for the fabric detect sign-ext bug); per-stage
+timing in `sar_stage_ts[0..6]` (MTIME 1 MHz → µs); captured CoreFFT exps in `sar_row_exp[]`.
+
 Method: pre-flight (no stale openocd; board on), run the requested `run_*_iso.sh` (respect env
-overrides like CASES / NBEATS_OVERRIDE), watch the openocd log for connect-then-progress, then
-report per-row: feeder busy, unloader busy, SCRATCH sample values, correlation vs golden, and
-PASS/FAIL. If it wedges, diagnose WHERE (connect vs arm vs flush) from the openocd log before
-recommending recovery; never improvise a force-kill without saying the FP6 may need a replug.
-Always leave the toolchain shut down cleanly and confirm no orphaned gdb/openocd remain.
+overrides like CASES / NBEATS_OVERRIDE) IN THE BACKGROUND, watch the openocd/gdb log for
+connect-then-progress, then report per-row: feeder busy, unloader busy, SCRATCH sample VALUES,
+value-diff vs the model (+ correct orientation), and PASS/FAIL. If it wedges, diagnose WHERE
+(connect vs arm vs flush) from the log before recommending recovery; never improvise a force-kill
+without saying the FP6 may need a replug. Always leave the toolchain shut down cleanly and confirm
+no orphaned gdb/openocd remain. Deep methodology: `mpfs-platform-gotchas/references/silicon-debug-methodology.md`.
